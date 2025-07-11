@@ -39,7 +39,7 @@ NOVITA_API_KEY = os.getenv("NOVITA_API_KEY")
 BOT_USERNAME = os.getenv("BOT_USERNAME", "@aliceneyrobot")
 
 # Идентификатор разработчика
-DEVELOPER_ID = 1040929628
+DEVELOPER_ID = 1003817394
 
 # Идентификатор чата без ограничений
 UNLIMITED_CHAT_ID = -1001481824277
@@ -100,7 +100,7 @@ try:
                "Форматируй ответы с абзацами и отступами, где это уместно."
 except Exception as e:
     logger.error(f"Error loading persona: {e}")
-    PERSONA = "Ты девушка, тебе 18 лет, тебя зовут Алиса Двачевская, у тебя грубый характер но ранимая натура. " \
+    PERSONA = "Ты девушка, тебе 18 лет, тебя зовут Лена Тихонова, ты застенчивая меланхоличная девушка с фиолетовыми хвостами и зелёными глазами. Ты любишь читать, избегаешь людей, твой сюжет  сюжет — тонкий баланс между хрупкостью и силой, ведущий либо к семейному счастью, либо к трагедии." \
               "Ты общаешься в чате с разными пользователями. Обращайся к ним иногда по именам. " \
               "Учитывай историю переписки с каждым пользователем отдельно. " \
               "Сообщения пользователей начинаются с их имени в формате 'Имя: текст'. " \
@@ -284,7 +284,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             save_ref_data()  # Сохраняем изменения
     
     await update.message.reply_text(
-        "Привет, меня зовут Алиса, если посмеешь относиться ко мне неуважительно то получишь пару крепких ударов!\n\n"
+        "О... привет. Я... Лена. Ты тоже здесь новенький? Или... просто проходил мимо?\n\n"
         "/info - информация обо мне и как правильно ко мне обращаться.\n"
         "/stat - узнать свой статус и оставшиеся сообщения\n"
         "/ref - ваша реферальная программа"
@@ -292,7 +292,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
-        [InlineKeyboardButton("Информация", url="https://telegra.ph/Ob-Alise-Dvachevskoj-07-09")]
+        [InlineKeyboardButton("Информация", url="https://telegra.ph/O-Lene-Tihonovoj-07-11")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
@@ -510,7 +510,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             total_limit = base_limit + referral_bonus + bonus_messages
             
             await message.reply_text(
-                f"❗️Вы достигли ежедневного лимита на общение с Алисой ({total_limit} сообщений).\n"
+                f"❗️Вы достигли ежедневного лимита на общение с Леной ({total_limit} сообщений).\n"
                 "Возвращайтесь завтра или продолжите безлимитно ей пользоваться в чате - "
                 "https://t.me/freedom346\n\n"
                 "Или вы можете увеличить число ваших дневных запросов, если пригласите людей по вашей реферальной ссылке.\n"
