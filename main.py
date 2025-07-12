@@ -59,7 +59,7 @@ last_cleanup_time = time.time()
 REF_DATA_FILE = "ref_data.json"
 
 # Список эмодзи для использования
-EMOJI_LIST = ["😊", "😂", "😍", "🤔", "😎", "👍", "❤️", "✨", "🎉", "💔"]
+EMOJI_LIST = ["😌", "😊", "💖", "🌙", "🎭", "🤍", "💫", "🥀", "🥂", "😒"]
 
 # Загрузка реферальных данных
 def load_ref_data():
