@@ -5,7 +5,6 @@ import threading
 import time
 import re
 import random
-import json
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from openai import OpenAI
@@ -24,6 +23,16 @@ from telegram.ext import (
     filters,
     ConversationHandler,
     CallbackQueryHandler
+)
+from database import (
+    add_referral,
+    get_referrer_id,
+    get_referral_count,
+    set_bonus_count,
+    get_bonus_count,
+    increment_daily_counter,
+    get_daily_counter,
+    cleanup_old_counters
 )
 
 # Настройка логгирования
@@ -49,46 +58,10 @@ SELECT_USER, SELECT_ACTION, INPUT_AMOUNT = range(3)
 
 # Глобальные переменные
 user_contexts = {}
-daily_message_counters = {}  # Формат: {(user_id, date): count}
-user_bonus_messages = {}    # Формат: {(user_id, date): bonus_count}
-user_referrals = {}         # Формат: {referrer_id: count}
-user_invited_by = {}        # Формат: {invited_user_id: referrer_id}
 last_cleanup_time = time.time()
-
-# Путь к файлу реферальных данных
-REF_DATA_FILE = "ref_data.json"
 
 # Список эмодзи для использования
 EMOJI_LIST = ["😌", "😊", "💖", "🌙", "🎭", "🤍", "💫", "🥀", "🥂", "😒"]
-
-# Загрузка реферальных данных
-def load_ref_data():
-    global user_referrals, user_invited_by
-    try:
-        if os.path.exists(REF_DATA_FILE):
-            with open(REF_DATA_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                user_referrals = data.get("user_referrals", {})
-                user_invited_by = data.get("user_invited_by", {})
-                # Преобразование ключей в int (JSON сохраняет ключи как строки)
-                user_referrals = {int(k): v for k, v in user_referrals.items()}
-                user_invited_by = {int(k): int(v) for k, v in user_invited_by.items()}
-            logger.info("Ref data loaded successfully")
-    except Exception as e:
-        logger.error(f"Error loading ref data: {e}")
-
-# Сохранение реферальных данных
-def save_ref_data():
-    try:
-        data = {
-            "user_referrals": user_referrals,
-            "user_invited_by": user_invited_by
-        }
-        with open(REF_DATA_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        logger.info("Ref data saved successfully")
-    except Exception as e:
-        logger.error(f"Error saving ref data: {e}")
 
 # Загрузка персонажа
 try:
@@ -108,82 +81,40 @@ except Exception as e:
               "Всегда завершай сообщение полностью. " \
               "Форматируй ответы с абзацами и отступами, где это уместно."
 
-# Функция очистки устаревших счетчиков
-def cleanup_old_counters():
-    global daily_message_counters, user_bonus_messages, last_cleanup_time
-    current_time = time.time()
-    
-    # Проверяем каждые 30 минут
-    if current_time - last_cleanup_time > 1800:
-        logger.info("Starting cleanup of old message counters")
-        today = datetime.utcnow().date()
-        keys_to_delete = []
-        
-        # Очистка daily_message_counters
-        for key in list(daily_message_counters.keys()):
-            user_id, date_str = key
-            try:
-                record_date = datetime.strptime(date_str, "%Y-%m-%d").date()
-                if (today - record_date).days > 1:
-                    keys_to_delete.append(key)
-                    del daily_message_counters[key]
-            except ValueError:
-                # Удаляем невалидные ключи
-                del daily_message_counters[key]
-                logger.warning(f"Removed invalid key: {key}")
-        
-        # Очистка user_bonus_messages
-        for key in list(user_bonus_messages.keys()):
-            user_id, date_str = key
-            try:
-                record_date = datetime.strptime(date_str, "%Y-%m-%d").date()
-                if (today - record_date).days > 1:
-                    if key not in keys_to_delete:
-                        keys_to_delete.append(key)
-                    del user_bonus_messages[key]
-            except ValueError:
-                del user_bonus_messages[key]
-                logger.warning(f"Removed invalid key: {key}")
-        
-        last_cleanup_time = current_time
-        logger.info(f"Cleanup completed. Removed {len(keys_to_delete)} old counters")
-
 # Функция проверки лимита сообщений
 def check_message_limit(user_id: int) -> bool:
     today = datetime.utcnow().strftime("%Y-%m-%d")
-    key = (user_id, today)
     
     # Очистка старых записей перед проверкой
-    cleanup_old_counters()
+    global last_cleanup_time
+    current_time = time.time()
+    if current_time - last_cleanup_time > 1800:
+        cleanup_old_counters()
+        last_cleanup_time = current_time
     
     # Базовый лимит
     base_limit = 35
     
     # Бонус за рефералов
-    referral_bonus = user_referrals.get(user_id, 0) * 3
+    referral_bonus = get_referral_count(user_id) * 3
     
-    # Бонусные сообщения от разработчика
-    bonus_messages = user_bonus_messages.get(key, 0)
+    # Постоянные бонусные сообщения
+    bonus_messages = get_bonus_count(user_id)
     
     # Общий доступный лимит
     total_limit = base_limit + referral_bonus + bonus_messages
     
-    # Инициализация счетчика
-    if key not in daily_message_counters:
-        daily_message_counters[key] = 0
+    # Получение текущего счетчика
+    current_count = get_daily_counter(user_id, today)
     
     # Проверка лимита
-    if daily_message_counters[key] >= total_limit:
+    if current_count >= total_limit:
         return False
     
-    # Увеличение счетчика
-    daily_message_counters[key] += 1
-    logger.info(f"User {user_id} message count: {daily_message_counters[key]}/{total_limit} (base: {base_limit}, referrals: {referral_bonus}, bonus: {bonus_messages})")
     return True
 
 # Функция для форматирования действий
 def format_actions(text: str) -> str:
-    # Просто оставляем действия в формате *действие*
     return text
 
 # Функция для добавления эмодзи
@@ -271,28 +202,48 @@ def query_chat(messages: list) -> str:
         logger.error(f"Novita API error: {e}")
         return "Произошла ошибка при обработке запроса. Попробуйте позже."
 
+# Обработчик команды /buy
+async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.message.from_user
+    card_number = "2200 2480 7637 0799"
+    
+    text = (
+        "💎 <b>Здесь вы можете купить запросы</b> 💎\n\n"
+        "❓ <b>Как оплатить запросы в боте?</b> ❓\n"
+        "- 10 рублей = 1 запрос.\n"
+        f"- Вам необходимо отправить нужную сумму на карту: <code>{card_number}</code>\n"
+        f"- В сообщении к переводу обязательно укажите ваш Telegram ID: <code>{user.id}</code>\n"
+        "- В течении некоторого времени вам будут начислены бонусные запросы в боте.\n"
+        "- Если у вас возникли проблемы или вы хотите задать вопросы по покупке запросов, "
+        "то вы можете связаться напрямую с разработчиком - <a href='https://t.me/kiojomi'>kiojomi</a>"
+    )
+    
+    await update.message.reply_text(text, parse_mode="HTML")
+
 # Обработчики команд
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.message.from_user
     
     if context.args and context.args[0].isdigit():
         referrer_id = int(context.args[0])
-        if referrer_id != user.id and user.id not in user_invited_by:
-            user_invited_by[user.id] = referrer_id
-            user_referrals[referrer_id] = user_referrals.get(referrer_id, 0) + 1
+        if referrer_id != user.id and not get_referrer_id(user.id):
+            add_referral(user.id, referrer_id)
             logger.info(f"New referral: user {user.id} invited by {referrer_id}")
-            save_ref_data()  # Сохраняем изменения
     
     await update.message.reply_text(
-        "О... привет. Я... Лена. Ты тоже здесь новенький? Или... просто проходил мимо?\n\n"
+        "Привет... Я Лена.
+Рада тебя видеть... может, позже прогуляемся? Я покажу рисунки... или просто посидим, если хочешь.
+
+P.S. Если увидишь Ульяну с кузнечиком... предупреди, пожалуйста? ^-^\n\n"
         "/info - информация обо мне и как правильно ко мне обращаться.\n"
         "/stat - узнать свой статус и оставшиеся сообщения\n"
-        "/ref - ваша реферальная программа"
+        "/ref - ваша реферальная программа\n"
+        "/buy - купить дополнительные запросы"
     )
 
 async def info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
-        [InlineKeyboardButton("Информация", url="https://telegra.ph/O-Lene-Tihonovoj-07-11")]
+        [InlineKeyboardButton("Информация", url="https://telegra.ph/Ob-Alise-Dvachevskoj-07-09")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
@@ -306,14 +257,23 @@ async def ref_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.message.from_user
     bot_username = (await context.bot.get_me()).username
     ref_link = f"https://t.me/{bot_username}?start={user.id}"
-    count = user_referrals.get(user.id, 0)
+    count = get_referral_count(user.id)
+    
+    # Рассчитать общий доступный лимит для пользователя
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    base_limit = 35
+    referral_bonus = count * 3
+    bonus_messages = get_bonus_count(user.id)
+    total_limit = base_limit + referral_bonus + bonus_messages
     
     await update.message.reply_text(
         f"👥 <b>Ваша реферальная программа</b>\n\n"
         f"• Ваша ссылка: <code>{ref_link}</code>\n"
         f"• Приглашено пользователей: {count}\n"
-        f"• Каждый приглашенный пользователь увеличивает ваш дневной лимит на +3 сообщения\n\n"
-        f"Поделитесь своей ссылкой с друзьями, чтобы увеличить количество доступных сообщений!",
+        f"• Каждый приглашенный пользователь увеличивает ваш дневной лимит на +3 сообщения\n"
+        f"• Текущий доступный лимит: <b>{total_limit}</b> сообщений в день\n\n"
+        f"Поделитесь своей ссылкой с друзьями, чтобы увеличить количество доступных сообщений!\n\n"
+        f"💎 Также вы можете <b>купить дополнительные запросы</b> командой /buy",
         parse_mode="HTML"
     )
 
@@ -332,29 +292,36 @@ async def clear_context(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def stat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.message.from_user
     today = datetime.utcnow().strftime("%Y-%m-%d")
-    key = (user.id, today)
     
     has_context = any(ctx_key[1] == user.id for ctx_key in user_contexts.keys())
     
-    used_messages = daily_message_counters.get(key, 0)
+    used_messages = get_daily_counter(user.id, today)
     
     base_limit = 35
-    referral_bonus = user_referrals.get(user.id, 0) * 3
-    bonus_messages = user_bonus_messages.get(key, 0)
+    referral_count = get_referral_count(user.id)
+    referral_bonus = referral_count * 3
+    bonus_messages = get_bonus_count(user.id)
     total_limit = base_limit + referral_bonus + bonus_messages
     remaining = max(0, total_limit - used_messages)
     
+    # Проверяем, является ли чат безлимитным
+    is_unlimited = update.message.chat_id == UNLIMITED_CHAT_ID
+    
+    unlimited_info = "\n• Вы находитесь в безлимитном чате" if is_unlimited else ""
+    
     message = (
-        f"📊 <b>Ваш статус:</b>\n\n"
+        f"📊 <b>Ваш статус:</b>\n"
+        f"{unlimited_info}\n\n"
         f"• Базовый лимит: {base_limit}\n"
-        f"• Бонус за рефералов: +{referral_bonus} (приглашено: {user_referrals.get(user.id, 0)})\n"
+        f"• Бонус за рефералов: +{referral_bonus} (приглашено: {referral_count})\n"
         f"• Бонусные сообщения: +{bonus_messages}\n"
         f"• Итого доступно: <b>{total_limit}</b>\n"
         f"• Использовано: {used_messages}\n"
         f"• Осталось: <b>{remaining}</b>\n\n"
         f"• История диалога: {'сохранена' if has_context else 'отсутствует'}\n\n"
         f"💡 Для сброса истории используйте /clear\n"
-        f"👥 Приглашайте друзей: /ref"
+        f"👥 Приглашайте друзей: /ref\n"
+        f"💎 Купить дополнительные запросы: /buy"
     )
     
     await update.message.reply_text(message, parse_mode="HTML")
@@ -428,30 +395,29 @@ async def input_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     amount = int(user_input)
     target_user_id = context.user_data['target_user_id']
     action = context.user_data['action']
-    today = datetime.utcnow().strftime("%Y-%m-%d")
-    key = (target_user_id, today)
     
-    if key not in user_bonus_messages:
-        user_bonus_messages[key] = 0
+    # Работа с постоянными бонусами
+    current_bonus = get_bonus_count(target_user_id)
     
     if action == "add_messages":
-        user_bonus_messages[key] += amount
+        new_bonus = current_bonus + amount
+        set_bonus_count(target_user_id, new_bonus)
         action_result = "добавлены"
     else:
-        user_bonus_messages[key] = max(0, user_bonus_messages[key] - amount)
+        new_bonus = max(0, current_bonus - amount)
+        set_bonus_count(target_user_id, new_bonus)
         action_result = "убраны"
     
-    current_bonus = user_bonus_messages[key]
     base_limit = 35
-    referral_bonus = user_referrals.get(target_user_id, 0) * 3
-    total_limit = base_limit + referral_bonus + current_bonus
+    referral_bonus = get_referral_count(target_user_id) * 3
+    total_limit = base_limit + referral_bonus + new_bonus
     
     report = (
         f"✅ Успешно!\n\n"
         f"• Пользователь ID: {target_user_id}\n"
         f"• Действие: {action_result} {amount} бонусных сообщений\n"
-        f"• Текущие бонусные сообщения: {current_bonus}\n"
-        f"• Общий доступный лимит: {total_limit} ({base_limit} базовых + {referral_bonus} реферальных + {current_bonus} бонусных)"
+        f"• Текущие бонусные сообщения: {new_bonus}\n"
+        f"• Общий доступный лимит: {total_limit} ({base_limit} базовых + {referral_bonus} реферальных + {new_bonus} бонусных)"
     )
     
     await update.message.reply_text(report)
@@ -497,26 +463,30 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     # Проверка лимита сообщений (только для обычных чатов)
-    if not is_unlimited and not is_private:
+    if not is_unlimited:
+        # Проверяем лимит перед увеличением счетчика
         if not check_message_limit(user.id):
             logger.warning(f"User {user.full_name} ({user.id}) exceeded daily message limit")
             
             today = datetime.utcnow().strftime("%Y-%m-%d")
-            user_key = (user.id, today)
-            
             base_limit = 35
-            referral_bonus = user_referrals.get(user.id, 0) * 3
-            bonus_messages = user_bonus_messages.get(user_key, 0)
+            referral_bonus = get_referral_count(user.id) * 3
+            bonus_messages = get_bonus_count(user.id)
             total_limit = base_limit + referral_bonus + bonus_messages
             
             await message.reply_text(
                 f"❗️Вы достигли ежедневного лимита на общение с Леной ({total_limit} сообщений).\n"
                 "Возвращайтесь завтра или продолжите безлимитно ей пользоваться в чате - "
                 "https://t.me/freedom346\n\n"
-                "Или вы можете увеличить число ваших дневных запросов, если пригласите людей по вашей реферальной ссылке.\n"
-                "/ref - узнать подробнее."
+                "Или вы можете:\n"
+                "• Увеличить число дневных запросов через реферальную программу: /ref\n"
+                "• Купить дополнительные запросы: /buy"
             )
             return
+        
+        # Увеличиваем счетчик сообщений только если лимит не превышен
+        today = datetime.utcnow().strftime("%Y-%m-%d")
+        increment_daily_counter(user.id, today)
     
     logger.info(f"Обработка сообщения от {user.full_name} в чате {chat_id}: {message.text}")
     
@@ -559,7 +529,8 @@ async def post_init(application: Application) -> None:
         BotCommand("info", "Информация о боте и правила использования"),
         BotCommand("clear", "Очистить историю диалога"),
         BotCommand("stat", "Статус и оставшиеся сообщения"),
-        BotCommand("ref", "Реферальная программа")
+        BotCommand("ref", "Реферальная программа"),
+        BotCommand("buy", "Купить дополнительные запросы")
     ]
     await application.bot.set_my_commands(commands)
     logger.info("Меню команд бота установлено")
@@ -571,9 +542,6 @@ def main():
     if not NOVITA_API_KEY:
         logger.error("NOVITA_API_KEY environment variable is missing!")
         return
-
-    # Загружаем реферальные данные
-    load_ref_data()
 
     # Запуск HTTP-сервера
     port = int(os.getenv('PORT', 8080))
@@ -591,6 +559,7 @@ def main():
     application.add_handler(CommandHandler("ref", ref_command))
     application.add_handler(CommandHandler("clear", clear_context))
     application.add_handler(CommandHandler("stat", stat))
+    application.add_handler(CommandHandler("buy", buy_command))
     
     # Скрытая команда для разработчика
     dev_handler = ConversationHandler(
