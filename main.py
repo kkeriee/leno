@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 # Загрузка конфигурации
 TOKEN = os.getenv("TG_TOKEN")
 NOVITA_API_KEY = os.getenv("NOVITA_API_KEY")
-BOT_USERNAME = os.getenv("BOT_USERNAME", "@aliceneyrobot")
+BOT_USERNAME = os.getenv("BOT_USERNAME", "@lenaneyrobot")
 
 # Идентификатор разработчика
 DEVELOPER_ID = 1003817394
@@ -240,7 +240,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
-        [InlineKeyboardButton("Информация", url="https://telegra.ph/Ob-Alise-Dvachevskoj-07-09")]
+        [InlineKeyboardButton("Информация", url="https://telegra.ph/O-Lene-Tihonovoj-07-11")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
